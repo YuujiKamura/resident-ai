@@ -116,8 +116,10 @@ pub fn extract_tagged(text: &str, tag_open: &str, tag_close: &str) -> Option<Str
 mod tests {
     use super::*;
 
+    // === extract_tagged: exact input → exact output ===
+
     #[test]
-    fn simple_extract() {
+    fn extract_simple() {
         assert_eq!(
             extract_tagged("noise <RESULT>hello</RESULT> noise", "<RESULT>", "</RESULT>"),
             Some("hello".into())
@@ -125,320 +127,231 @@ mod tests {
     }
 
     #[test]
-    fn multiline() {
+    fn extract_multiline() {
         assert_eq!(
-            extract_tagged(
-                "<RESULT>\nline1\nline2\n</RESULT>",
-                "<RESULT>",
-                "</RESULT>"
-            ),
+            extract_tagged("<RESULT>\nline1\nline2\n</RESULT>", "<RESULT>", "</RESULT>"),
             Some("line1\nline2".into())
         );
     }
 
     #[test]
-    fn no_tags() {
-        assert_eq!(
-            extract_tagged("no tags here", "<RESULT>", "</RESULT>"),
-            None
-        );
+    fn extract_no_tags() {
+        assert_eq!(extract_tagged("no tags here", "<RESULT>", "</RESULT>"), None);
     }
 
     #[test]
-    fn incomplete() {
-        assert_eq!(
-            extract_tagged("<RESULT>partial", "<RESULT>", "</RESULT>"),
-            None
-        );
+    fn extract_incomplete_open_only() {
+        assert_eq!(extract_tagged("<RESULT>partial", "<RESULT>", "</RESULT>"), None);
     }
 
     #[test]
-    fn last_wins() {
+    fn extract_last_occurrence_wins() {
         assert_eq!(
-            extract_tagged(
-                "<RESULT>old</RESULT> junk <RESULT>new</RESULT>",
-                "<RESULT>",
-                "</RESULT>"
-            ),
+            extract_tagged("<RESULT>old</RESULT> junk <RESULT>new</RESULT>", "<RESULT>", "</RESULT>"),
             Some("new".into())
         );
     }
 
     #[test]
-    fn with_tui_noise() {
-        let buf = "▀▀▀▀▀\n > prompt\n▄▄▄▄▄\n✦ <RESULT>\n4\n</RESULT>\n────\n? for shortcuts";
+    fn extract_empty_content_returns_none() {
+        assert_eq!(extract_tagged("<RESULT>  </RESULT>", "<RESULT>", "</RESULT>"), None);
+    }
+
+    #[test]
+    fn extract_empty_string() {
+        assert_eq!(extract_tagged("", "<RESULT>", "</RESULT>"), None);
+    }
+
+    #[test]
+    fn extract_custom_tags() {
         assert_eq!(
-            extract_tagged(buf, "<RESULT>", "</RESULT>"),
+            extract_tagged("xxx<OUT>data</OUT>yyy", "<OUT>", "</OUT>"),
+            Some("data".into())
+        );
+    }
+
+    #[test]
+    fn extract_with_ansi_escapes() {
+        assert_eq!(
+            extract_tagged("\x1b[32m<RESULT>green</RESULT>\x1b[0m", "<RESULT>", "</RESULT>"),
+            Some("green".into())
+        );
+    }
+
+    #[test]
+    fn extract_with_cursor_and_clear() {
+        assert_eq!(
+            extract_tagged("\x1b[H\x1b[2J<RESULT>cleared</RESULT>", "<RESULT>", "</RESULT>"),
+            Some("cleared".into())
+        );
+    }
+
+    #[test]
+    fn extract_with_tui_decorations() {
+        assert_eq!(
+            extract_tagged("▀▀▀\n✦ \x1b[1m<RESULT>\n4\n</RESULT>\x1b[0m ────", "<RESULT>", "</RESULT>"),
             Some("4".into())
         );
     }
 
-    // NOTE: ConPTY live tests (Node.js TTY detection, gemini session) require
-    // a GUI host process (no inherited console). They cannot pass from
-    // mintty/Git Bash or cargo test. See conpty.rs module docs.
+    // === build_message: exact input → exact output ===
 
-    // --- Item 1: CLI path resolution (ConPty::spawn) ---
+    #[test]
+    fn build_no_files() {
+        assert_eq!(
+            build_message("hello", None, "<R>", "</R>"),
+            "hello 結果を<R>と</R>で囲んで返せ\r"
+        );
+    }
+
+    #[test]
+    fn build_with_two_files() {
+        assert_eq!(
+            build_message("analyze", Some(&["a.jpg", "b.pdf"]), "<R>", "</R>"),
+            "@a.jpg @b.pdf analyze 結果を<R>と</R>で囲んで返せ\r"
+        );
+    }
+
+    #[test]
+    fn build_single_file() {
+        assert_eq!(
+            build_message("p", Some(&["photo.jpg"]), "<R>", "</R>"),
+            "@photo.jpg p 結果を<R>と</R>で囲んで返せ\r"
+        );
+    }
+
+    #[test]
+    fn build_five_files_order_preserved() {
+        assert_eq!(
+            build_message("go", Some(&["1.jpg", "2.jpg", "3.jpg", "4.jpg", "5.jpg"]), "<T>", "</T>"),
+            "@1.jpg @2.jpg @3.jpg @4.jpg @5.jpg go 結果を<T>と</T>で囲んで返せ\r"
+        );
+    }
+
+    #[test]
+    fn build_file_with_spaces() {
+        assert_eq!(
+            build_message("p", Some(&["my file.jpg"]), "<R>", "</R>"),
+            "@my file.jpg p 結果を<R>と</R>で囲んで返せ\r"
+        );
+    }
+
+    #[test]
+    fn build_empty_prompt() {
+        assert_eq!(
+            build_message("", None, "<R>", "</R>"),
+            " 結果を<R>と</R>で囲んで返せ\r"
+        );
+    }
+
+    #[test]
+    fn build_unicode_prompt() {
+        assert_eq!(
+            build_message("日本語テスト", None, "<R>", "</R>"),
+            "日本語テスト 結果を<R>と</R>で囲んで返せ\r"
+        );
+    }
+
+    #[test]
+    fn build_custom_tags() {
+        assert_eq!(
+            build_message("test", None, "<OUT>", "</OUT>"),
+            "test 結果を<OUT>と</OUT>で囲んで返せ\r"
+        );
+    }
+
+    #[test]
+    fn build_prompt_with_model_flag() {
+        assert_eq!(
+            build_message("--model flash analyze this", None, "<R>", "</R>"),
+            "--model flash analyze this 結果を<R>と</R>で囲んで返せ\r"
+        );
+    }
+
+    // === baseline tracking: sequential query simulation ===
+
+    #[test]
+    fn baseline_extracts_second_result() {
+        let buf = "noise <RESULT>first</RESULT> gap <RESULT>second</RESULT> end";
+        // After first query, baseline is set past the first result
+        let first_end = buf.find("gap").unwrap();
+        let new_content = &buf[first_end..];
+        assert_eq!(extract_tagged(new_content, "<RESULT>", "</RESULT>"), Some("second".into()));
+    }
+
+    #[test]
+    fn baseline_at_end_returns_none() {
+        let buf = "<RESULT>data</RESULT>";
+        let new_content = &buf[buf.len()..];
+        assert_eq!(extract_tagged(new_content, "<RESULT>", "</RESULT>"), None);
+    }
+
+    #[test]
+    fn baseline_skips_old_result() {
+        let buf = "<RESULT>old</RESULT>---<RESULT>new</RESULT>";
+        let baseline = buf.find("---").unwrap();
+        assert_eq!(extract_tagged(&buf[baseline..], "<RESULT>", "</RESULT>"), Some("new".into()));
+        // Verify "old" is not accessible from new baseline
+        assert!(!buf[baseline..].contains("<RESULT>old</RESULT>"));
+    }
+
+    // === constants ===
+
+    #[test]
+    fn default_timeout_is_180() {
+        assert_eq!(DEFAULT_TIMEOUT_SECS, 180);
+    }
+
+    #[test]
+    fn default_tags() {
+        assert_eq!(DEFAULT_TAG_OPEN, "<RESULT>");
+        assert_eq!(DEFAULT_TAG_CLOSE, "</RESULT>");
+    }
+
+    #[test]
+    fn poll_interval_is_500ms() {
+        assert_eq!(POLL_INTERVAL_MS, 500);
+    }
+
+    // === ConPTY-dependent tests ===
 
     #[test]
     #[cfg(windows)]
-    fn spawn_cmd_succeeds() {
-        let result = crate::conpty::ConPty::spawn("cmd.exe /c exit 0");
-        assert!(result.is_ok(), "expected Ok, got {:?}", result.err());
+    fn spawn_valid_command_succeeds() {
+        assert!(crate::conpty::ConPty::spawn("cmd.exe /c exit 0").is_ok());
     }
 
     #[test]
     #[cfg(windows)]
-    fn spawn_nonexistent_fails() {
-        let result = crate::conpty::ConPty::spawn("nonexistent_program_xyz.exe");
-        assert!(result.is_err(), "expected Err for nonexistent binary");
+    fn spawn_nonexistent_command_fails() {
+        assert!(crate::conpty::ConPty::spawn("nonexistent_program_xyz.exe").is_err());
     }
 
     #[test]
     #[cfg(windows)]
     fn spawn_empty_command_fails() {
-        let result = crate::conpty::ConPty::spawn("");
-        assert!(result.is_err(), "expected Err for empty command");
-    }
-
-    // --- Item 2: Prompt construction ---
-
-    #[test]
-    fn build_message_no_files() {
-        let msg = build_message("hello", None, "<R>", "</R>");
-        assert!(msg.contains("hello"));
-        assert!(msg.contains("結果を<R>と</R>で囲んで返せ"));
-        assert!(!msg.contains('@'));
-    }
-
-    #[test]
-    fn build_message_with_files() {
-        let msg = build_message("analyze", Some(&["a.jpg", "b.pdf"]), "<R>", "</R>");
-        assert!(msg.starts_with("@a.jpg @b.pdf "), "got: {:?}", msg);
-    }
-
-    #[test]
-    fn build_message_tag_instruction() {
-        let msg = build_message("x", None, "<R>", "</R>");
-        assert!(msg.contains("結果を<R>と</R>で囲んで返せ"));
-        assert!(msg.ends_with('\r'));
-    }
-
-    // --- Item 3: Model selection ---
-
-    #[test]
-    fn build_message_preserves_prompt_with_model() {
-        let msg = build_message("--model flash analyze this", None, "<R>", "</R>");
-        assert!(msg.contains("--model flash"));
-    }
-
-    #[test]
-    fn build_message_empty_prompt() {
-        let msg = build_message("", None, "<R>", "</R>");
-        assert!(msg.contains("結果を<R>と</R>で囲んで返せ"));
-    }
-
-    #[test]
-    fn build_message_unicode_prompt() {
-        let msg = build_message("日本語テスト", None, "<R>", "</R>");
-        assert!(msg.contains("日本語テスト"));
-    }
-
-    // --- Item 4: Output format (tag customization) ---
-
-    #[test]
-    fn custom_tags_in_message() {
-        let msg = build_message("test", None, "<OUT>", "</OUT>");
-        assert!(msg.contains("結果を<OUT>と</OUT>で囲んで返せ"));
-    }
-
-    #[test]
-    fn extract_custom_tags() {
-        let result = extract_tagged("...<OUT>data</OUT>...", "<OUT>", "</OUT>");
-        assert_eq!(result, Some("data".into()));
-    }
-
-    #[test]
-    fn extract_mismatched_tags_returns_none() {
-        // tag_close "</B>" is present but tag_open "<A>" does not appear before it,
-        // so extraction should return None (no "<A>" in the search region before "</B>").
-        let result = extract_tagged("<A>data</B>", "<A>", "</B>");
-        // rfind("</B>") finds position 9; search_region = "<A>data"; rfind("<A>") finds 0;
-        // content = "data" which is non-empty — so this actually returns Some("data").
-        // The test documents the actual behavior: both tags present → content extracted.
-        assert_eq!(result, Some("data".into()));
-    }
-
-    // --- Item 5: File path handling ---
-
-    #[test]
-    fn build_message_single_file() {
-        let msg = build_message("p", Some(&["photo.jpg"]), "<R>", "</R>");
-        assert!(msg.contains("@photo.jpg "), "got: {:?}", msg);
-    }
-
-    #[test]
-    fn build_message_many_files() {
-        let files = ["f1.jpg", "f2.jpg", "f3.jpg", "f4.jpg", "f5.jpg"];
-        let msg = build_message("p", Some(&files), "<R>", "</R>");
-        for f in &files {
-            assert!(msg.contains(&format!("@{} ", f)), "missing @{} in {:?}", f, msg);
-        }
-        // Order preserved: f1 appears before f5
-        let pos1 = msg.find("@f1.jpg").unwrap();
-        let pos5 = msg.find("@f5.jpg").unwrap();
-        assert!(pos1 < pos5);
-    }
-
-    #[test]
-    fn build_message_file_with_spaces() {
-        let msg = build_message("p", Some(&["my file.jpg"]), "<R>", "</R>");
-        assert!(msg.contains("@my file.jpg "), "got: {:?}", msg);
-    }
-
-    // --- Item 11: Multiple queries / sequential use ---
-
-    #[test]
-    fn sequential_extraction_from_growing_buffer() {
-        // Simulate: first query result in buffer, then more data appended
-        let buf1 = "noise <RESULT>first</RESULT> more noise";
-        assert_eq!(extract_tagged(buf1, "<RESULT>", "</RESULT>"), Some("first".into()));
-
-        // After first extraction, baseline moves. New content starts after old.
-        let buf2 = "noise <RESULT>first</RESULT> more noise <RESULT>second</RESULT> end";
-        let baseline = buf1.len(); // would be set after first query
-        let new_content = &buf2[baseline..];
-        assert_eq!(extract_tagged(new_content, "<RESULT>", "</RESULT>"), Some("second".into()));
-    }
-
-    #[test]
-    fn baseline_prevents_re_extraction() {
-        // If baseline is past the first result, it shouldn't be found again
-        let full = "<RESULT>old</RESULT>gap<RESULT>new</RESULT>";
-        let baseline = full.find("gap").unwrap(); // past first result
-        let new_content = &full[baseline..];
-        assert_eq!(extract_tagged(new_content, "<RESULT>", "</RESULT>"), Some("new".into()));
-        // "old" is not extracted
-    }
-
-    #[test]
-    fn empty_new_content_returns_none() {
-        let full = "<RESULT>data</RESULT>";
-        let baseline = full.len(); // baseline at end
-        let new_content = &full[baseline..];
-        assert_eq!(extract_tagged(new_content, "<RESULT>", "</RESULT>"), None);
-    }
-
-    // --- Item 12: Error handling — dead session, bad state ---
-
-    #[test]
-    #[cfg(windows)]
-    fn session_with_short_lived_process() {
-        // cmd.exe /c exit 0 exits immediately
-        // ResidentSession waits 3s at startup, process should be dead by then
-        let session = crate::session::ResidentSession::new("cmd.exe /c exit 0").unwrap();
-        assert!(!session.is_alive(), "process should have exited");
+        assert!(crate::conpty::ConPty::spawn("").is_err());
     }
 
     #[test]
     #[cfg(windows)]
-    fn spawn_and_check_dead_process() {
-        use crate::conpty::ConPty;
-        let pty = ConPty::spawn("cmd.exe /c exit 0").unwrap();
-        std::thread::sleep(std::time::Duration::from_secs(2));
-        assert!(!pty.is_alive(), "should be dead after exit");
-    }
-
-    #[test]
-    fn extract_from_empty_string() {
-        assert_eq!(super::extract_tagged("", "<RESULT>", "</RESULT>"), None);
-    }
-
-    // --- Item 14 (partial): Metrics / observability — timeout constant ---
-
-    #[test]
-    fn default_timeout_value() {
-        assert_eq!(super::DEFAULT_TIMEOUT_SECS, 180, "default timeout should be 180 seconds");
-    }
-
-    // --- Item 8: Timeout logic ---
-
-    #[test]
-    fn timeout_error_contains_tag() {
-        let tag_close = "</RESULT>";
-        let timeout_secs = 180u64;
-        let msg = format!("timeout waiting for {} after {}s", tag_close, timeout_secs);
-        assert!(msg.contains("</RESULT>"), "timeout error should contain the close tag");
-    }
-
-    #[test]
-    fn extract_returns_none_triggers_timeout_path() {
-        // If extract_tagged returns None, the polling loop continues until deadline.
-        // Prove that no-tag input returns None (the condition that causes timeout).
-        let result = extract_tagged("no tags here", "<RESULT>", "</RESULT>");
-        assert_eq!(result, None, "no tags should return None, triggering timeout path");
-    }
-
-    #[test]
-    fn extract_returns_some_avoids_timeout() {
-        // If extract_tagged returns Some, the loop exits early (success path).
-        let result = extract_tagged("<RESULT>answer</RESULT>", "<RESULT>", "</RESULT>");
-        assert_eq!(result, Some("answer".to_string()), "valid tags should return Some, avoiding timeout");
-    }
-
-    // --- Item 9: ANSI/TUI noise resilience ---
-
-    #[test]
-    fn extract_with_ansi_escapes() {
-        let result = extract_tagged(
-            "\x1b[32m<RESULT>green</RESULT>\x1b[0m",
-            "<RESULT>",
-            "</RESULT>",
-        );
-        assert_eq!(result, Some("green".to_string()));
-    }
-
-    #[test]
-    fn extract_with_cursor_positioning() {
-        let result = extract_tagged(
-            "\x1b[H\x1b[2J<RESULT>cleared</RESULT>",
-            "<RESULT>",
-            "</RESULT>",
-        );
-        assert_eq!(result, Some("cleared".to_string()));
-    }
-
-    #[test]
-    fn extract_with_mixed_unicode_and_ansi() {
-        let result = extract_tagged(
-            "✦ \x1b[1m<RESULT>\ndata\n</RESULT>\x1b[0m ────",
-            "<RESULT>",
-            "</RESULT>",
-        );
-        assert_eq!(result, Some("data".to_string()));
-    }
-
-    // --- Item 10: First query / session startup ---
-
-    #[test]
-    #[cfg(windows)]
-    fn session_spawn_cmd_alive() {
-        // ResidentSession::new waits 3s for CLI startup. After that, cmd.exe in a
-        // ConPTY context (no real user) may have already exited — that's environment-
-        // specific. The meaningful assertion is that the session was created successfully.
-        let session = ResidentSession::new("cmd.exe");
-        assert!(session.is_ok(), "ResidentSession::new should succeed for cmd.exe");
+    fn short_lived_process_is_dead_after_wait() {
+        let session = ResidentSession::new("cmd.exe /c exit 0").unwrap();
+        // ResidentSession::new waits 3s. cmd.exe /c exit 0 exits immediately.
+        assert_eq!(session.is_alive(), false);
     }
 
     #[test]
     #[cfg(windows)]
-    fn session_spawn_invalid_fails() {
-        let result = ResidentSession::new("nonexistent_xyz.exe");
-        assert!(result.is_err(), "ResidentSession::new should fail for nonexistent binary");
+    fn interactive_cmd_is_alive() {
+        // ping runs for ~100s, outlasting ResidentSession::new's 3s startup wait
+        let session = ResidentSession::new("ping -n 100 127.0.0.1").unwrap();
+        assert_eq!(session.is_alive(), true);
     }
 
     #[test]
-    fn session_default_tags() {
-        assert_eq!(DEFAULT_TAG_OPEN, "<RESULT>");
-        assert_eq!(DEFAULT_TAG_CLOSE, "</RESULT>");
+    #[cfg(windows)]
+    fn spawn_invalid_session_fails() {
+        assert!(ResidentSession::new("nonexistent_xyz.exe").is_err());
     }
 }
