@@ -167,6 +167,30 @@ impl AcpSession {
         self.prompt(&build_prompt_text(text, Some(files)))
     }
 
+    /// Send a text prompt with an image embedded as base64.
+    pub fn prompt_with_image(&mut self, text: &str, image_path: &Path) -> Result<String, AcpError> {
+        let data = std::fs::read(image_path)
+            .map_err(|e| AcpError(format!("read image {}: {}", image_path.display(), e)))?;
+        let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &data);
+        let mime = match image_path.extension().and_then(|e| e.to_str()) {
+            Some("png") => "image/png",
+            Some("jpg" | "jpeg") => "image/jpeg",
+            Some("gif") => "image/gif",
+            Some("webp") => "image/webp",
+            _ => "application/octet-stream",
+        };
+
+        let sid = self.session_id.clone();
+        let id = self.send("session/prompt", serde_json::json!({
+            "sessionId": sid,
+            "prompt": [
+                {"type": "image", "mimeType": mime, "data": b64},
+                {"type": "text", "text": text}
+            ]
+        }))?;
+        self.collect_response(id)
+    }
+
     fn send(&mut self, method: &str, params: Value) -> Result<u64, AcpError> {
         let id = self.next_id;
         self.next_id += 1;
