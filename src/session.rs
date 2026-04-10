@@ -169,4 +169,8 @@ mod tests {
             Some("4".into())
         );
     }
+
+    // NOTE: ConPTY live tests (Node.js TTY detection, gemini session) require
+    // a GUI host process (no inherited console). They cannot pass from
+    // mintty/Git Bash or cargo test. See conpty.rs module docs.
 }
