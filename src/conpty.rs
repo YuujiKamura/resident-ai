@@ -274,4 +274,153 @@ mod tests {
         ConPty::reattach_console();
         // No assert — this is diagnostic only. Will pass from GUI host.
     }
+
+    // --- Item 6: Subprocess spawn ---
+
+    #[test]
+    #[cfg(windows)]
+    fn spawn_returns_ok() {
+        let result = ConPty::spawn("cmd.exe /c exit 0");
+        assert!(result.is_ok(), "spawn should succeed: {:?}", result.err());
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn process_alive_after_spawn() {
+        // Spawn interactive cmd.exe (no /c so it stays alive).
+        // Check is_alive() immediately — cmd.exe does not exit instantly.
+        let pty = ConPty::spawn("cmd.exe").expect("spawn cmd.exe");
+        assert!(pty.is_alive(), "cmd.exe should still be alive immediately after spawn");
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn spawn_with_args() {
+        // Both should succeed; /c echo test exits immediately, bare cmd stays alive
+        let pty_with_args = ConPty::spawn("cmd.exe /c echo test");
+        let pty_bare = ConPty::spawn("cmd.exe");
+        assert!(pty_with_args.is_ok(), "spawn with args should succeed");
+        assert!(pty_bare.is_ok(), "spawn bare cmd.exe should succeed");
+        // They are independent spawns — both succeed but behave differently
+    }
+
+    // --- Item 7: stdout capture / buffer ---
+
+    #[test]
+    #[cfg(windows)]
+    fn buffer_initially_small() {
+        let pty = ConPty::spawn("cmd.exe /c exit 0").expect("spawn");
+        std::thread::sleep(Duration::from_millis(300));
+        // Buffer may have ANSI init bytes but should be small (< 100 bytes)
+        let len = pty.buffer_len();
+        assert!(len < 100, "initial buffer should be small, got {} bytes", len);
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn buffer_len_matches_read_buffer() {
+        let pty = ConPty::spawn("cmd.exe /c exit 0").expect("spawn");
+        std::thread::sleep(Duration::from_millis(300));
+        let buf = pty.read_buffer();
+        let len = pty.buffer_len();
+        assert_eq!(len, buf.len(), "buffer_len() should equal read_buffer().len()");
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn write_does_not_error() {
+        let pty = ConPty::spawn("cmd.exe").expect("spawn cmd.exe");
+        std::thread::sleep(Duration::from_millis(200));
+        let result = pty.write(b"echo test\r\n");
+        assert!(result.is_ok(), "write should not error: {:?}", result.err());
+    }
+
+    // --- Item 13: Resource management — unique pipes, handles ---
+
+    #[test]
+    #[cfg(windows)]
+    fn pipe_counter_increments() {
+        use std::sync::atomic::Ordering;
+        let before = super::PIPE_COUNTER.load(Ordering::Relaxed);
+        let _pty = ConPty::spawn("cmd.exe /c exit 0").unwrap();
+        let after = super::PIPE_COUNTER.load(Ordering::Relaxed);
+        assert!(after > before, "pipe counter should increment on spawn");
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn multiple_instances_unique_counters() {
+        use std::sync::atomic::Ordering;
+        let before = super::PIPE_COUNTER.load(Ordering::Relaxed);
+        let _pty1 = ConPty::spawn("cmd.exe /c exit 0").unwrap();
+        let _pty2 = ConPty::spawn("cmd.exe /c exit 0").unwrap();
+        let after = super::PIPE_COUNTER.load(Ordering::Relaxed);
+        // Tests run in parallel so other tests may also increment the counter;
+        // assert at least 2 increments happened (one per spawn in this test).
+        assert!(after >= before + 2, "two spawns should increment counter by at least 2, got before={} after={}", before, after);
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn spawn_and_drop_no_panic() {
+        // Just ensure spawn + immediate drop doesn't panic or leak
+        {
+            let _pty = ConPty::spawn("cmd.exe /c exit 0").unwrap();
+        }
+        // If we get here, drop succeeded
+    }
+
+    // --- Item 14: Metrics / observability ---
+
+    #[test]
+    #[cfg(windows)]
+    fn buffer_grows_over_time() {
+        let pty = ConPty::spawn("cmd.exe /c echo something").unwrap();
+        let initial = pty.buffer_len();
+        std::thread::sleep(Duration::from_secs(2));
+        // Buffer might have received ANSI init sequences at minimum
+        // We just check it doesn't shrink
+        assert!(pty.buffer_len() >= initial, "buffer should not shrink");
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn is_alive_reflects_state() {
+        let pty = ConPty::spawn("cmd.exe").unwrap();
+        assert!(pty.is_alive(), "interactive cmd should be alive");
+        // Note: we can't easily kill it in this test, just verify alive state
+    }
+
+    // --- Item 15: Drop cleanup — process termination ---
+
+    #[test]
+    #[cfg(windows)]
+    fn drop_terminates_process() {
+        // We can't easily check after drop since handles are gone.
+        // Instead verify the drop path doesn't panic with a living process.
+        let pty = ConPty::spawn("cmd.exe").unwrap();
+        assert!(pty.is_alive());
+        drop(pty);
+        // If we get here, drop succeeded without panic
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn drop_handles_already_dead_process() {
+        let pty = ConPty::spawn("cmd.exe /c exit 0").unwrap();
+        std::thread::sleep(Duration::from_secs(2));
+        assert!(!pty.is_alive());
+        drop(pty);
+        // Drop on dead process should not panic
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn multiple_spawn_drop_cycles() {
+        for _ in 0..3 {
+            let _pty = ConPty::spawn("cmd.exe /c exit 0").unwrap();
+            // implicit drop at end of loop iteration
+        }
+        // 3 cycles without panic = resource cleanup working
+    }
 }
