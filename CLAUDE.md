@@ -1,13 +1,35 @@
 # resident-ai
 
-ConPTY で AI CLI を常駐させ、タグベースで応答を抽出するクレート。
+ConPTY 上で AI CLI を動かし、タグベースで応答を抽出するクレート。
 
-## 現状 (2026-04-10)
+## 仕様
+
+### セッションモデル
+
+resident-ai は ConPTY 上の AI CLI セッションを提供する。セッションの持続時間によって2つの使い方がある:
+
+- **短命セッション**: 1回の query で起動→応答→終了。呼び出し側からはワンショットに見える
+- **長命セッション**: 起動したまま複数 query を受ける。起動コストを償却する
+
+どちらも同じ基盤（ConPTY + タグ抽出）の上にある。持続時間が違うだけで、API は同一。
+
+### なぜ ConPTY が必要か
+
+AI CLI（gemini, claude 等）は `isatty(stdin)` でインタラクティブモードを判定する。
+`std::process::Command` のパイプ stdin では非TTY扱いになり、ワンショットで終了するか起動を拒否する。
+ConPTY は OS レベルで TTY を提供し、CLI がインタラクティブモードで起動する。
+
+### 応答抽出
+
+TUI 出力をパースせず、プロンプトに「`<RESULT>` タグで囲め」と指示し、タグ間のテキストを抽出する。
+TUI の装飾・ANSI エスケープ・Unicode は無視される。
+
+## 現状
 
 ### ビルド・テスト
 ```bash
 cargo build   # OK
-cargo test    # 6 pass, 1 ignored (ConPTY診断テスト)
+cargo test -- --test-threads=1   # 51 pass
 ```
 
 ### 構成
@@ -15,53 +37,35 @@ cargo test    # 6 pass, 1 ignored (ConPTY診断テスト)
 src/
 ├── lib.rs       — モジュール宣言
 ├── conpty.rs    — Windows ConPTY ラッパー (named pipe input + anonymous pipe output)
-└── session.rs   — ResidentSession + タグ抽出 (<RESULT>...</RESULT>)
+├── session.rs   — ResidentSession + build_message + extract_tagged
+└── bin/e2e.rs   — GUI ホスト用 E2E テストバイナリ（未検証）
 ```
 
-### 実装済み
-- Named pipe 化（input pipe）: `\\.\pipe\LOCAL\resident-ai-{pid}-{counter}`
-- `SetHandleInformation` で全ハンドル non-inheritable
-- `ResizePseudoConsole` による flush_render
-- `FreeConsole` / `AllocConsole` ヘルパー
-- タグ抽出ユニットテスト 6件
+### テストカバレッジ（51テスト）
+1. CLI パス解決（spawn 成功/失敗/空文字列）
+2. プロンプト構築（ファイルなし/あり/タグ指示）
+3. モデル選択（プロンプト保持/空/Unicode）
+4. 出力フォーマット（カスタムタグ/不一致タグ）
+5. ファイルパス（単一/複数/スペース含む）
+6. サブプロセス起動（OK/alive/引数付き）
+7. バッファキャプチャ（初期サイズ/len一致/write OK）
+8. タイムアウト（エラー形式/None-Some パス）
+9. ANSI ノイズ耐性（エスケープ/カーソル/混合Unicode）
+10. セッション起動（alive/無効コマンド/デフォルトタグ）
+11. 逐次クエリ（ベースライン追跡/再抽出防止）
+12. エラーハンドリング（死んだプロセス/空文字列）
+13. リソース管理（パイプカウンタ/一意性/drop）
+14. メトリクス（バッファ成長/is_alive/タイムアウト定数）
+15. Drop クリーンアップ（生存/死亡/サイクル）
 
-### 発見: ConPTY output capture の環境制約
+### 未検証事項
 
-**ConPTY の output pipe にテキスト内容が流れるのは、親プロセスにコンソールがない場合のみ。**
-
-| 環境 | ConPTY output pipe | 実用性 |
-|------|-------------------|--------|
-| GUI アプリ (ghostty-win) | テキスト含む VT sequences | OK |
-| cmd.exe / PowerShell | WriteConsole が親コンソールに流出 | FreeConsole で回避可能 |
-| mintty / Git Bash | パイプベースで FreeConsole 無効 | 不可 |
-| cargo test (Git Bash経由) | 上記と同じ | 診断テストのみ |
-
-`ResizePseudoConsole` でフラッシュすると制御シーケンスは来るがテキストは空。
-子プロセス (cmd.exe, Node.js) の出力が ConPTY スクリーンバッファをバイパスしている。
-
-### 次にやること（優先順）
-
-1. **ghostty-win から ConPTY 出力を検証**
-   - ghostty-win は GUI アプリ（コンソールなし）→ ConPTY が正常動作するはず
-   - `ResidentSession::new("gemini.cmd")` + `session.query()` のE2Eテスト
-
-2. **Node.js isTTY 検証**
-   - GUI ホストから ConPTY 経由で Node.js を起動し `process.stdin.isTTY` が true になるか確認
-   - true なら gemini CLI はインタラクティブモードで起動する
-
-3. **代替手段の検討（isTTY=false の場合）**
-   - `winpty` を PTY レイヤーとして使う（Git for Windows に同梱）
-   - `gemini -p "prompt"` でワンショット実行（resident ではないが確実）
-
-## 設計の背景
-
-- Gemini CLI は `-i`(インタラクティブ) + パイプ入力を明示的にブロック
-- パイプ stdin → headless 1ショットで死ぬ（`isatty` チェック）
-- ConPTY なら TTY として認識される → インタラクティブモードで常駐（GUI ホスト前提）
-- 応答抽出は TUI パースではなく `<RESULT>` タグで指示 → 確実
+- ConPTY output pipe 経由のテキスト受信（GUI ホストからの実行が必要）
+- Node.js の `process.stdin.isTTY` が ConPTY 下で true になるか
+- gemini CLI のインタラクティブモード起動
+- `detach_console` / `flush_render` の実効性（mintty からは無効だった）
 
 ## 参照
 
 - `~/ghostty-win/src/pty.zig:324-478` — ConPTY 実装リファレンス（named pipe パターン）
-- `~/cli-ai-analyzer/` — TimeBasedQuota/PayPerUse の既存実装
-- `~/deckpilot/` — セッション管理（将来的に統合候補）
+- `~/cli-ai-analyzer/` — 既存の AI CLI ラッパー（std::process::Command ベース）

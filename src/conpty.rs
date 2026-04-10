@@ -252,29 +252,6 @@ mod tests {
     use super::*;
     use std::time::Duration;
 
-    /// Diagnostic: dump ConPTY buffer to verify pipe connectivity.
-    /// From mintty/Git Bash, text content will NOT appear in the buffer
-    /// (only ANSI control sequences). This is expected — see module docs.
-    ///
-    /// Run: cargo test test_conpty_diag -- --ignored --nocapture
-    #[test]
-    #[ignore]
-    fn test_conpty_diag() {
-        ConPty::detach_console();
-
-        let pty = ConPty::spawn("cmd.exe /c echo MARKER_CONPTY").expect("spawn");
-        std::thread::sleep(Duration::from_secs(2));
-        pty.flush_render();
-        std::thread::sleep(Duration::from_secs(1));
-
-        let buf = pty.read_buffer();
-        eprintln!("Buffer ({} bytes): {:?}", buf.len(), buf);
-        eprintln!("Contains MARKER: {}", buf.contains("MARKER_CONPTY"));
-
-        ConPty::reattach_console();
-        // No assert — this is diagnostic only. Will pass from GUI host.
-    }
-
     // --- Item 6: Subprocess spawn ---
 
     #[test]
