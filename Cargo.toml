@@ -1,20 +1,9 @@
 [package]
 name = "resident-ai"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
-description = "Persistent AI CLI session via ConPTY with tag-based response extraction"
+description = "Persistent AI CLI session via ACP (JSON-RPC 2.0 over stdio)"
 
 [dependencies]
 base64 = "0.22"
 serde_json = "1"
-
-[target.'cfg(windows)'.dependencies]
-windows = { version = "0.61", features = [
-    "Win32_Foundation",
-    "Win32_System_Console",
-    "Win32_System_Threading",
-    "Win32_System_Pipes",
-    "Win32_Storage_FileSystem",
-    "Win32_Security",
-    "Win32_System_IO",
-] }
