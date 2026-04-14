@@ -115,8 +115,17 @@ pub struct AcpSession {
 impl AcpSession {
     /// Spawn gemini.cmd --acp, perform handshake, return ready session.
     pub fn new(cwd: &Path) -> Result<Self, AcpError> {
-        let mut child = Command::new("gemini.cmd")
-            .arg("--acp")
+        Self::new_with_model(cwd, None)
+    }
+
+    /// 同上、`-m <model>` を gemini.cmd に渡せる版。
+    pub fn new_with_model(cwd: &Path, model: Option<&str>) -> Result<Self, AcpError> {
+        let mut cmd = Command::new("gemini.cmd");
+        cmd.arg("--acp");
+        if let Some(m) = model {
+            cmd.arg("-m").arg(m);
+        }
+        let mut child = cmd
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -169,24 +178,31 @@ impl AcpSession {
 
     /// Send a text prompt with an image embedded as base64.
     pub fn prompt_with_image(&mut self, text: &str, image_path: &Path) -> Result<String, AcpError> {
-        let data = std::fs::read(image_path)
-            .map_err(|e| AcpError(format!("read image {}: {}", image_path.display(), e)))?;
-        let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &data);
-        let mime = match image_path.extension().and_then(|e| e.to_str()) {
-            Some("png") => "image/png",
-            Some("jpg" | "jpeg") => "image/jpeg",
-            Some("gif") => "image/gif",
-            Some("webp") => "image/webp",
-            _ => "application/octet-stream",
-        };
+        self.prompt_with_images_inline(text, &[image_path])
+    }
+
+    /// Send a text prompt with N images embedded as base64 (single ACP turn).
+    pub fn prompt_with_images_inline(&mut self, text: &str, images: &[&Path]) -> Result<String, AcpError> {
+        let mut prompt_items = Vec::with_capacity(images.len() + 1);
+        for image_path in images {
+            let data = std::fs::read(image_path)
+                .map_err(|e| AcpError(format!("read image {}: {}", image_path.display(), e)))?;
+            let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &data);
+            let mime = match image_path.extension().and_then(|e| e.to_str()) {
+                Some("png") => "image/png",
+                Some("jpg" | "jpeg" | "JPG" | "JPEG") => "image/jpeg",
+                Some("gif") => "image/gif",
+                Some("webp") => "image/webp",
+                _ => "application/octet-stream",
+            };
+            prompt_items.push(serde_json::json!({"type": "image", "mimeType": mime, "data": b64}));
+        }
+        prompt_items.push(serde_json::json!({"type": "text", "text": text}));
 
         let sid = self.session_id.clone();
         let id = self.send("session/prompt", serde_json::json!({
             "sessionId": sid,
-            "prompt": [
-                {"type": "image", "mimeType": mime, "data": b64},
-                {"type": "text", "text": text}
-            ]
+            "prompt": prompt_items
         }))?;
         self.collect_response(id)
     }
