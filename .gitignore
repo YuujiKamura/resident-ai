@@ -12,3 +12,5 @@ bin/
 *.test
 *.out
 go.sum
+*.JPG
+*.PNG
